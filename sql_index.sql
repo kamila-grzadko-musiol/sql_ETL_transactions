@@ -164,3 +164,261 @@
     -> Analizuj z EXPLAIN i SHOW INDEX FROM.
     -> Stosuj kompozytowe indeksy zgodnie z kolejnością zapytań.
 */
+
+create table users(
+    user_id int primary key auto_increment,
+    email varchar(255) not null,
+    username varchar(250),
+    create_at datetime
+);
+
+-- Unikalny indeks dla email
+create unique index idx_users_email on users(email);
+
+alter table users add column address varchar(50) unique;
+
+-- Zwykły indeks na username (często używany do wyszukiwania)
+create index idx_users_username on users(username);
+
+-- Indeks dla create_at (np. do sortowania, filtrowania po dacie rejestracji)
+create index idx_users_create_at on users(create_at);
+
+create table orders (
+    order_id int primary key auto_increment,
+    user_id int not null,
+    total_amount decimal(10,2),
+    status varchar(50),
+    order_date datetime,
+    foreign key (user_id) references users(user_id) on delete cascade on update cascade
+);
+-- Indeks na user_id zostanie utworzony automatycznie przez FOREIGN KEY
+
+-- Indeks kompozytowy dla raportow wg statusu i daty
+create index idx_orders_status_order_date on orders(status, order_date);
+
+-- Indeks na order_date do sortowania
+create index idx_orders_order_date on orders(order_date);
+
+create table products(
+  product_id int primary key auto_increment,
+  name varchar(255),
+  category_id int,
+  price decimal(10,2),
+  create_at datetime
+);
+
+-- Indeksa na name (do szybkiego wyszukiwania po nazwie)
+create index idx_products_name on products(name);
+
+-- Kompozytowy indeks: do filtrowania po kategorii i sortowanie po cenie
+create index idx_products_category_price on products(category_id, price);
+
+-- Indeks na created_at (np. ostatnio dodane produkty)
+create index idx_products_create_at on products(create_at);
+
+create table articles (
+    article_id int primary key auto_increment,
+    title varchar(255),
+    content text
+);
+-- Indeks fulltext na content
+create fulltext index idx_article_content on articles(content);
+
+-- Mozesz tez indeksowac kilka kolumn
+create fulltext index idx_article_title_content on articles(title, content);
+
+/*
+    Oba powyzsze indeksy umożliwiają szybkie wyszukiwanie tekstu – w zależności od tego, czy przeszukujesz
+    tylko content, czy title i content razem.
+
+    SELECT * FROM articles
+    WHERE MATCH(content) AGAINST('sztuczna inteligencja');
+    -> Wyszukuje wszystkie wiersze, gdzie kolumna content zawiera słowo "sztuczna" lub "inteligencja".
+    -> MySQL przeszukuje wcześniej utworzony FULLTEXT INDEX na content.
+    -> Wyniki są rankowane według trafności (relevance score), domyślnie w trybie naturalnym (natural language mode).
+    -> Nie szuka frazy dosłownie – liczy się obecność słów.
+
+    SELECT * FROM articles
+    WHERE MATCH(title, content) AGAINST('sztuczna inteligencja');
+
+    -> Przeszukuje oba pola (title i content) jednocześnie.
+    -> Zwraca wiersze, które mają dopasowanie w jednej lub obu kolumnach.
+    -> Używa FULLTEXT INDEX na (title, content).
+    -> Ranking wyników uwzględnia oba pola (np. jeśli słowo występuje w title, wynik może mieć wyższą wagę).
+
+    FULLTEXT sprawdzi się, gdy:
+    -> Duże ilości tekstu (artykuły, opisy, posty)
+    -> Chcesz szukać słów/fraz w treści
+    -> Potrzebujesz rankingu trafności
+
+    Ograniczenia FULLTEXT:
+    -> Małe kolumny z pojedynczymi słowami
+    -> Używasz LIKE '%słowo%' zamiast MATCH
+    -> Potrzebujesz dokładnego dopasowania znak w znak
+
+    Ograniczenia:
+    -> Tylko MATCH(...) AGAINST(...) aktywuje FULLTEXT – LIKE, = nie korzystają z indeksu.
+    -> Domyślnie ignorowane są:
+        -> słowa krótsze niż 3 znaki (innodb_ft_min_token_size),
+        -> często występujące słowa (tzw. stop words).
+    -> Tylko jeden FULLTEXT INDEX będzie użyty w zapytaniu.
+    -> Nie działa na kolumnach typu JSON.
+*/
+/*
+    Nie musisz jawnie wskazywać, że chcesz użyć indeksu w zapytaniu. Optymalizator zapytań (query optimizer)
+    robi to automatycznie. Jak to działa:
+    -> Gdy wykonujesz zapytanie (np. SELECT, UPDATE, DELETE), MySQL analizuje strukturę zapytania, dostępne
+    indeksy i statystyki tabeli.
+    -> Na tej podstawie decyduje, czy i który indeks będzie najefektywniejszy.
+    -> Jeśli uzna, że pełny skan tabeli (full table scan) będzie szybszy (np. gdy warunek WHERE nie filtruje zbyt
+    dużo danych), może zignorować indeks.
+
+    Jeśli naprawdę chcesz, możesz użyć:
+
+    -> USE INDEX – zasugeruj użycie konkretnego indeksu:
+    SELECT * FROM users USE INDEX (idx_email) WHERE email = 'jan@example.com';
+
+    -> FORCE INDEX – wymuś użycie danego indeksu (MySQL go wtedy prawie zawsze użyje):
+    SELECT * FROM users FORCE INDEX (idx_email) WHERE email = 'jan@example.com';
+
+    -> IGNORE INDEX – zignoruj konkretny indeks:
+    SELECT * FROM users IGNORE INDEX (idx_email) WHERE email = 'jan@example.com';
+
+    Nie nadużywaj FORCE INDEX – może to prowadzić do gorszej wydajności, jeśli dane się zmienią lub indeks
+    przestanie być optymalny.
+*/
+
+create table locations (
+    location_id int primary key auto_increment,
+    name varchar(100),
+    coordinates point not null,
+    -- Indeks przestrzenny (SPATIAL) umożliwia szybkie zapytania geolokalizacyjne.
+    spatial index (coordinates)
+);
+
+/*
+    SPATIAL INDEX w MySQL służy do przyspieszania zapytań na kolumnach zawierających dane
+    geometryczne, takich jak:
+    POINT – współrzędne (x, y) → np. długość i szerokość geograficzna,
+    LINESTRING, POLYGON, itd.
+    Jest to indeks oparty na strukturze R-Tree, zoptymalizowanej pod zapytania przestrzenne.
+
+    Stosuj go gdy:
+    -> Przechowujesz dane geolokalizacyjne (np. współrzędne GPS)
+    -> Chcesz robić zapytania typu „znajdź punkty w okolicy”
+    -> Używasz funkcji przestrzennych MySQL (np. ST_Contains, MBRContains)
+
+    SELECT * FROM locations
+    WHERE MBRContains(
+        ST_GeomFromText('POLYGON((10 10, 10 20, 20 20, 20 10, 10 10))'),
+        coordinates
+    );
+    MBRContains oznacza "Minimum Bounding Rectangle Contains" – szybka wersja ST_Contains.
+
+    SELECT *, ST_Distance_Sphere(coordinates, ST_GeomFromText('POINT(19.94 50.06)')) AS distance
+    FROM locations
+    ORDER BY distance
+    LIMIT 5;
+    To zapytanie oblicza odległość geograficzną (uwzględnia kulistość Ziemi), ale nie używa SPATIAL INDEX,
+    bo ST_Distance_Sphere działa poza indeksem.
+    Aby indeks działał, możesz najpierw zawęzić wyszukiwanie prostokątem (MBRContains) lub kołem.
+
+    Wyobraź sobie aplikację lokalizacyjną – np. mapa kawiarni:
+    -> Użytkownik podaje swoją lokalizację.
+    -> System szuka kawiarni w promieniu 1 km.
+    -> Najpierw zawężasz obszar MBRContains(...) z indeksem.
+    -> Potem stosujesz dokładne ST_Distance_Sphere(...) dla top-N wyników.
+*/
+
+--  Sprawdzenie jakie indeksy istnieja
+show index from orders;
+
+/*
+| Kolumna         | Znaczenie                                                                     |
+| --------------- | ----------------------------------------------------------------------------- |
+| `Table`         | Nazwa tabeli (czyli `orders`).                                                |
+| `Non_unique`    | `0` jeśli indeks **unikalny**, `1` jeśli **nieunikalny**.                     |
+| `Key_name`      | Nazwa indeksu (np. `PRIMARY`, `idx_customer_id`).                             |
+| `Seq_in_index`  | Pozycja kolumny w indeksie (dla indeksów wielokolumnowych).                   |
+| `Column_name`   | Nazwa kolumny, która jest częścią indeksu.                                    |
+| `Collation`     | Jak sortowane są wartości (`A` = Ascending, `D` = Descending, `NULL` = brak). |
+| `Cardinality`   | Szacunkowa liczba unikalnych wartości w kolumnie (dla optymalizatora).        |
+| `Sub_part`      | Jeśli indeks jest na prefiksie kolumny (np. `VARCHAR(255)` z prefiksem).      |
+| `Packed`        | Informacja o kompresji (zwykle `NULL`).                                       |
+| `Null`          | Czy kolumna dopuszcza wartości `NULL`.                                        |
+| `Index_type`    | Typ indeksu: `BTREE`, `FULLTEXT`, `SPATIAL`, `HASH`.                          |
+| `Comment`       | Komentarz systemowy (czasem zawiera dodatkowe informacje).                    |
+| `Index_comment` | Komentarz użytkownika (jeśli dodany przy tworzeniu indeksu).                  |
+| `Visible`       | `YES`/`NO` – czy indeks jest widoczny dla optymalizatora (MySQL 8+).          |
+| `Expression`    | Jeśli indeks bazuje na wyrażeniu (MySQL 8+), tu pojawi się wyrażenie.         |
+*/
+
+/*
+EXPLAIN pokazuje plan wykonania zapytania – czyli w jakiej kolejności i w jaki sposób MySQL:
+-> przeszukuje tabele,
+-> używa indeksów (lub ich nie używa),
+-> wykonuje złączenia,
+-> filtruje i sortuje dane.
+
+Dzięki temu możesz:
+-> zoptymalizować zapytania,
+-> zrozumieć, czy i jakie indeksy są wykorzystywane,
+-> wykryć wolne zapytania i ich przyczyny.
+*/
+
+explain select * from products where name = 'Laptop';
+
+/*
+    Co dostaniesz w wyniku powyzszego zapytania:
+
+    id
+    Identyfikator zapytania lub podzapytania.
+    Większa liczba = późniejsze wykonanie.
+
+    select_type
+    Rodzaj zapytania (SIMPLE, PRIMARY, SUBQUERY, DERIVED, UNION).
+
+    table
+    Nazwa tabeli (lub alias) aktualnie przetwarzanej.
+
+    type – BARDZO WAŻNE!
+    To typ dostępu – pokazuje, jak MySQL szuka danych. Od najlepszych do najgorszych:
+    const	    1 wiersz – np. WHERE id = 5, super szybkie
+    eq_ref	    Jedno dopasowanie, np. klucz obcy, JOIN po PK
+    ref	        Szuka po indeksie z nieunikalnymi danymi
+    range	    Zakres – np. WHERE date BETWEEN ...
+    index	    Przeszukuje cały indeks
+    ALL	        Pełne przeszukanie tabeli – NAJGORSZE
+
+    possible_keys
+    Indeksy, które mogłyby zostać użyte (wg MySQL).
+
+    key
+    Indeks, który został rzeczywiście użyty.
+
+    key_len
+    Długość użytej części indeksu (w bajtach).
+
+    ref
+    Wartość z porównania – np. const albo users.user_id.
+
+    rows
+    Liczba rzędów, które MySQL szacuje do przeszukania.
+
+    filtered
+    Procent wierszy, które przechodzą filtr (WHERE).
+
+    Extra
+    Dodatkowe informacje, np.:
+    -> Using index – zapytanie może być obsłużone w całości z indeksu.
+    -> Using where – dane są filtrowane po pobraniu.
+    -> Using temporary – użycie tymczasowej tabeli (np. dla GROUP BY).
+    -> Using filesort – sortowanie ręczne (nie przez indeks) – wolne!
+
+    Kiedy używać EXPLAIN?
+    -> Gdy optymalizujesz zapytanie.
+    -> Gdy zapytanie działa wolno.
+    -> Przed dodaniem indeksu – aby zobaczyć, czy zapytanie go wykorzystuje.
+    -> Po dodaniu indeksu – aby potwierdzić, że działa.
+*/
+
