@@ -189,3 +189,61 @@ group by subject, exam_date
 # 9. Czy student poprawił wynik w kolejnym egzaminie (tak / nie)?
 #    Wyświetl dane: student, przedmiot, aktualny wynik, poprzedni wynik oraz odpowiedź: 'yes' jeśli
 #    wynik się poprawił, 'no' w przeciwnym razie.
+
+select
+    s.student_name,
+    e.subject,
+    e.exam_date,
+    e.score as current_score,
+    lag(e.score) over (partition by e.student_id, e.subject order by e.exam_date) as previous_score,
+    case
+        when lag(e.score) over (partition by e.student_id, e.subject order by e.exam_date) is null then 'n/a'
+        when e.score > lag(e.score) over (partition by e.student_id, e.subject order by e.exam_date) is null then 'yes'
+        else'no'
+    end as improved
+from exams e
+join students s on s.student_id = e.student_id;
+
+# 10. Pokaż najlepszy i najgorszy wynik w danym przedmiocie (FIRST_VALUE, LAST_VALUE)
+#     Dla każdego egzaminu pokaż najwyższy i najniższy wynik z przedmiotu, bez względu na datę
+#     (w ramach całego subject).
+
+select
+    s.student_name,
+    e.subject,
+    e.score,
+    first_value(e.score) over (partition by e.subject order by e.score desc ) top_score,
+    last_value(e.score) over (partition by e.subject order by e.score desc rows between unbounded preceding and unbounded following)
+from exams e
+join students s on s.student_id = e.student_id;
+
+# 11. Pokaż studentów, ich wynik oraz różnicę między ich wynikiem a najlepszym wynikiem w danym
+#     przedmiocie.
+
+select
+    s.student_name,
+    e.subject,
+    e.score,
+    first_value(e.score) over w as best_score,
+    first_value(e.score) over w - e.score as gap_from_best_score
+from exams e
+join students s on s.student_id = e.student_id
+window w as (partition by e.subject order by e.score desc);
+
+
+# 12. Dla każdego studenta policz, ile egzaminów miał do danego dnia i jaka była suma punktów ze wszystkich
+#     wcześniejszych egzaminów (w obrębie przedmiotu).
+#     Wyświetl imię studenta, przedmiot, datę egzaminu, wynik z danego egzaminu oraz:
+#     -> liczbę egzaminów z tego przedmiotu do tej pory (włącznie),
+#     -> sumę punktów z tych egzaminów.
+
+select
+    s.student_name,
+    e.subject,
+    e.exam_date,
+    e.score,
+    count(*) over w as exams_so_far,
+    sum(e.score) over w as cumulative_score
+from exams e
+join students s on s.student_id = e.student_id
+window w as (partition by e.student_id, e.subject order by e.exam_date rows between unbounded preceding and current row )
