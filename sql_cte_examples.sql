@@ -108,3 +108,204 @@ join customer_avg ca on c.customer_id = ca.customer_id;
 -- Zadanie 5
 -- Na podstawie liczby zamowien wyswietl tylko tych klientow, ktorzy dokonali wiecej
 -- niz jednej transakcji
+
+with customer_order_count as (
+    select customer_id, count(*) as order_count
+    from orders
+    group by customer_id
+)
+select c.name, coc.order_count
+from customers c
+join customer_order_count coc on c.customer_id = coc.customer_id
+where coc.order_count > 1;
+
+-- Zadanie 6
+-- Zidentyfikuj wszystkie produkty, ktore nie wystepuja w zadnym zamowieniu
+
+with order_products as (
+    select distinct product_id
+    from order_items
+)
+select p.product_name
+from products p
+left join order_products op on p.product_id = op.product_id
+where op.product_id is null;
+
+-- Zadanie 7
+-- Sumuj ilosci produktow ze wszystkich zamowien danego klienta
+-- Dla kazdego klienta pokaz laczna liczbe zamowionych sztuk produktow
+
+with customers_items as (
+    select o.customer_id, sum(oi.quantity) as total_quantity
+    from orders o
+    join order_items oi on o.order_id = oi.order_id
+    group by o.customer_id
+)
+select c.name, ci.total_quantity
+from customers c
+join customers_items ci on c.customer_id=ci.customer_id;
+
+-- Zadanie 8
+-- Pokaz szczegoly ostatniego zamowienia kazdego klienta
+with
+    last_order as (
+        select customer_id, max(order_date) as last_date
+        from orders
+        group by customer_id
+),
+    order_details as (
+        select o.order_id, o.customer_id, o.order_date, c.name
+        from orders o
+        join customers c on c.customer_id = o.customer_id
+    )
+select od.*
+from order_details od
+join last_order lo on od.customer_id=lo.customer_id and od.order_date = lo.last_date;
+
+-- Zadanie 9
+-- Pokaz 3 najczesciej zamawiane produkty
+-- Sumujemy ilosci kazdego produktu w zamowieniach i pokazujemy top 3
+
+with product_quantity as (
+    select product_id, sum(quantity) as total_quantity
+    from order_items
+    group by product_id
+)
+select p.product_name, pq.total_quantity
+from product_quantity pq
+join products p on pq.product_id=p.product_id
+order by pq.total_quantity desc
+limit 3;
+
+-- Zadanie 10
+-- Wyswietl zamowienia, ktorych laczna wartosc przekracza srednia wartosc wszystkich zamowien
+-- CTE avg_value zawiera tylko jeden wiersz (średnia wartość), więc chcesz tę wartość dołączyć do każdego wiersza
+-- z orders. Zastosowanie on true daje nam tzw. cross joina
+-- W tym przypadku czy wybierzemy cross join czy on true bedzie ok, a Ty masz alternatywe w takiej sytuacji.
+
+with order_totals as (
+    select order_id, sum(oi.quantity * p.price) as total_value
+    from order_items oi
+    join products p on p.product_id = oi.product_id
+    group by order_id
+),
+    avg_value as (
+        select avg(total_value) as avg_order_value from order_totals
+    )
+select o.order_id, o.order_date, ot .total_value
+from orders o
+join order_totals ot on ot.order_id=o.order_id
+-- join avg_value av on true
+cross join avg_value av
+where ot.total_value > av.avg_order_value;
+
+-- Zadanie 11
+-- Pokaz produkty, ktore byly zamawiane przez wiecej niz jednego klienta
+
+with
+    product_customers as (
+        select oi.product_id, o.customer_id
+        from order_items oi
+        join orders o on oi.order_id = o.order_id
+        group by oi.product_id, o.customer_id
+),
+    product_counts as (
+        select product_id, count(*) as unique_customers
+        from product_customers
+        group by product_id
+    )
+select p.product_name, pc.unique_customers
+from product_counts pc
+join products p on pc.product_id=p.product_id
+where pc.unique_customers > 1;
+
+--  ====================================================================================================================
+--  CTE REKURENCYJNE
+--  ====================================================================================================================
+
+--  Zadanie 1
+--  Rekurencyjne wyliczenie zamowien - 1 dziennie do najnowszego.
+--  Zacznij od najstarszego zamowienia i rekurencyjnie dodawaj kolejne dni, pokazujac, ile zamowien bylo kazdego dnia.
+
+with recursive dates(date) as (
+    select min(order_date) from orders
+    union all
+    select date + interval 1 day
+    from dates
+    where date + interval 1 day <= (select max(order_date) from orders)
+)
+select d.date, count(order_id) as order_on_day
+from dates d
+left join orders o on o.order_date=d.date
+group by d.date
+order by d.date;
+
+--  Zadanie 2
+--  Rekurencyjna eksplozja zamowien klienta dzien po dniu
+--  Dla konkretnego klienta wyswietl dzien po dniu historie zamowien, nawet jesli nie zlozyl zamowienia danego dnia
+
+with recursive customer_dates(date) as (
+    select min(order_date) from orders where customer_id = 1
+    union all
+    select date + interval 1 day
+    from customer_dates
+    where date + interval 1 day <= (select max(order_date) from orders where customer_id  = 1)
+)
+select cd.date, count(o.order_id) as orders
+from customer_dates cd
+left join orders o on o.order_date= cd.date and o.customer_id=1
+group by cd.date
+order by cd.date;
+
+--  Zadanie 3
+--  Obliczanie skumulowanej liczby zamowien
+--  Liczymy ile lacznie zamowien bylo do danego dnia.
+
+with recursive daily_orders as (
+    select min(order_date) as order_date, 0 as total_orders
+    from orders
+    union all
+    select do.order_date + interval 1 day,
+           (select count(*) from orders where order_date <= + interval 1 day)
+    from daily_orders do
+    where do.order_date + interval 1 day <= (select max(order_date) from orders)
+)
+select * from daily_orders;
+
+with recursive daily_orders as (
+    -- Tutaj drobna poprawka, zeby policzyc, ile bylo zamowien w pierwszym dniu
+
+    -- STARA WERSJA
+    -- select min(order_date) as order_date, 0 as total_orders
+    -- from orders
+    -- POWINNO BYC TAK:
+    select min(order_date) as order_date, count(*) as total_orders
+    from orders
+    where order_date = (select min(order_date) from orders)
+    union all
+    select do.order_date + interval 1 day,
+           (select count(*) from orders where order_date <= do.order_date + interval 1 day)
+    from daily_orders do
+    where do.order_date + interval 1 day  <= (select max(order_date) from orders)
+)
+select * from daily_orders;
+
+--  Teraz optymalizacja powyzszego zapytania z zapamietaniem tego, co bylo wyliczone do tej pory.
+--  order_date      -   dzien ktory wlasnie analizujemy
+--  total_orders    -   laczna liczba zamowien do tego dnia
+--  Co zyskujemy?
+--  Kazdy krok liczy tylko zamowienia z jednego konkretnego dnia
+--  Laczna suma jest niemalejaca, bo dodajemy do poprzedniego total_orders
+
+with recursive daily_orders as (
+    select min(order_date) as order_date, count(*) as total_orders
+    from orders
+    where order_date= (select min(order_date) from orders)
+    union all
+    select do.order_date + interval 1 day,
+           do.total_orders + (
+               select count(*) from orders where order_date = do.order_date + interval 1 day)
+    from daily_orders do
+    where do.order_date + interval 1 day <= (select max(order_date) from orders)
+)
+select * from daily_orders;
