@@ -170,3 +170,110 @@ call demo_all_types_of_params(@x, @y, @z);
 select @x;
 select @y;
 select @z;
+
+/*
+    Funkcje Składowane (Stored Functions)
+    Funkcja składowana to blok kodu SQL z logiką, który zwraca pojedynczą wartość. Funkcja – w odróżnieniu od procedury
+    – może być używana w zapytaniach SELECT, w klauzulach WHERE, ORDER BY, JOIN, HAVING itd.
+
+    ->  Zwraca dokładnie jedną wartość (przez RETURN).
+    ->  Nie może (w większości silników, np. MySQL) wykonywać operacji zmieniających dane (np. INSERT, DELETE).
+    ->  Świetnie nadaje się do obliczeń, przekształceń, walidacji.
+    ->  Może używać zmiennych lokalnych i logiki warunkowej.
+    ->  Może być wykorzystywana w każdym zapytaniu SQL jak funkcje wbudowane (LENGTH(), NOW()).
+
+    Co nam daje uzywanie funkcji skladowanych?
+    ->  Możliwość użycia w zapytaniach SELECT.
+    ->  Reużywalność logiki – np. przeliczanie rabatów, formatowanie nazw.
+    ->  Czystość kodu SQL – mniejsze i bardziej czytelne zapytania.
+    ->  Testowalność – funkcje są łatwe do testowania jednostkowego.
+*/
+
+--  Dlaczego musze dodac read sql data?
+--  Informujesz MySQL, że funkcja odczytuje dane z tabel (SELECT), ale nie modyfikuje danych.
+--  Jest to wymagane przy włączonym log_bin (binary logging), np. w środowiskach replikacji lub serwerach
+--  produkcyjnych.
+--  MySQL potrzebuje tej informacji do optymalizacji, bezpieczeństwa i zgodności replikacji (binlog).
+--  Jeśli masz replikację (czyli serwer główny i podrzędny) i używasz funkcji, która:
+--  ->  zwraca losową wartość (RAND()),
+--  ->  odczytuje dane (SELECT ...),
+--  to replika może uzyskać inny wynik, jeśli nie wie, co ta funkcja robi.
+--  Dlatego musisz jawnie powiedzieć:
+--  ->  DETERMINISTIC	    Funkcja zawsze daje ten sam wynik dla tych samych danych wejściowych.
+--  ->  NOT DETERMINISTIC	Wynik może się zmieniać (np. przez NOW(), RAND(), SELECT).
+--  ->  NO SQL	            Funkcja nie używa żadnych zapytań SQL.
+--  ->  READS SQL DATA	    Funkcja odczytuje dane z bazy (np. SELECT).
+--  ->  MODIFIES SQL DATA	Funkcja zmienia dane (np. INSERT/UPDATE).
+
+create function is_business_customer(p_customer_id int)
+    returns  boolean
+    reads sql data
+begin
+    declare domain varchar(100);
+    declare email_adress varchar(100);
+
+    select email into email_adress from customers where id=p_customer_id;
+    -- SUBSTRING_INDEX(str, delimiter, count)
+    -- str – tekst wejściowy (np. e-mail)
+    -- delimiter – znak lub ciąg znaków, względem którego dzielimy (tu: '@')
+    -- count – ile części ma zostać zwrócone:
+    --  dodatnia liczba: zwraca wszystko od początku do n-tego wystąpienia delimiter'a
+    --  ujemna liczba: zwraca wszystko od końca do n-tego wystąpienia delimiter'a
+    set domain = substring_index(email_adress, '@', -1);
+    return domain not in('gmail.com', 'wp.pl', 'o2.pl', 'interia.pl');
+end;
+
+select * from customers;
+
+select is_business_customer(100) as is_business;
+
+select *, if(is_business_customer(id), 'B', 'NB')
+from customers
+where is_business_customer(id);
+
+-- Obliczanie lacznej wartosci koszyka z cart_items.
+create function get_customer_cart_total(p_cart_id int, discount decimal(10,2))
+returns decimal(10,2)
+reads sql data
+begin
+    declare cart_total decimal(10,2);
+
+    select ifnull(sum(quantity * price), 0)
+        into cart_total
+    from cart_items
+        where cart_id = p_cart_id;
+
+    return cart_total * discount;
+end;
+
+select *
+from get_customer_cart_total(1, 0.98) as cart_total;
+
+create function has_role(p_user_id int, p_role varchar(50))
+returns boolean
+reads sql data
+begin
+    declare found int;
+    select count(*) into found
+    from user_roles
+        where user_id = p_user_id and role_name = p_role;
+    return found > 0;
+end;
+
+select has_role(100, 'user') as is_user;
+select has_role(100, 'admin') as is_admin;
+
+create function get_last_order_total(p_customer_id int)
+returns decimal(10,2)
+reads sql data
+begin
+    declare last_total decimal(10,2);
+    select total into last_total
+    from orders
+        where customer_id = p_customer_id
+    order by created_at desc
+    limit 1;
+    return ifnull(last_total, 0.00);
+end;
+
+select get_last_order_total(100) as last_order;
